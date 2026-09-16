@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Market Signal Pro</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.5.0/build/global/luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+  <style>
+    :root{--bg:#0b0e13;--panel:#11161e;--panel2:#151b24;--border:#252d39;--text:#e8edf5;--muted:#8b96a7;--green:#20c997;--red:#ff5c70;--yellow:#f4c95d;--blue:#5da9ff}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Arial,sans-serif}
+    button,select{font:inherit}button{cursor:pointer}.app{min-height:100vh}.top{height:62px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 18px;gap:18px;background:#0d1118;position:sticky;top:0;z-index:5}
+    .brand{font-weight:800;letter-spacing:.3px}.brand span{color:var(--blue)}.status{font-size:12px;color:var(--muted)}.top .spacer{flex:1}.select{background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:7px}
+    .layout{display:grid;grid-template-columns:220px 1fr;min-height:calc(100vh - 62px)}.side{border-right:1px solid var(--border);padding:12px;background:#0d1118}.side h4{font-size:11px;color:var(--muted);margin:12px 8px 7px;text-transform:uppercase;letter-spacing:.9px}
+    .watch{width:100%;border:1px solid transparent;background:transparent;color:var(--text);display:flex;justify-content:space-between;padding:9px 8px;border-radius:7px;text-align:left}.watch:hover,.watch.active{background:var(--panel2);border-color:var(--border)}.watch small{color:var(--muted)}
+    main{padding:16px;min-width:0}.hero{display:flex;align-items:center;gap:18px;margin-bottom:14px}.symbol{font-size:23px;font-weight:800}.price{font-size:22px}.chg{font-size:13px}.green{color:var(--green)}.red{color:var(--red)}.muted{color:var(--muted)}
+    .signal{margin-left:auto;border:1px solid var(--border);background:var(--panel);border-radius:10px;padding:10px 15px;min-width:145px;text-align:center}.signal b{display:block;font-size:18px}.signal small{color:var(--muted)}
+    .grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px}.card{background:var(--panel);border:1px solid var(--border);border-radius:10px}.cardhead{padding:11px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}.cardhead .spacer{flex:1}.tabs button{background:transparent;border:0;color:var(--muted);padding:6px 9px}.tabs button.active{color:var(--text);background:var(--panel2);border-radius:6px}.chartbox{height:520px;padding:8px}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;padding:12px}.stat{background:var(--panel2);border:1px solid var(--border);padding:10px;border-radius:8px}.stat small{display:block;color:var(--muted);font-size:11px}.stat b{font-size:15px}
+    .right{display:flex;flex-direction:column;gap:14px}.rows{padding:7px 12px}.row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #202733}.row:last-child{border:0}.row span{color:var(--muted);font-size:12px}
+    .controls{display:flex;gap:6px;flex-wrap:wrap}.tf{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:6px 8px}.tf.active{color:var(--text);background:var(--panel2)}
+    .panelbody{padding:13px}.note{font-size:12px;color:var(--muted);line-height:1.5}.btn{background:#1a2431;border:1px solid var(--border);color:var(--text);padding:8px 11px;border-radius:7px}.btn:hover{background:#202c3c}
+    .table{width:100%;border-collapse:collapse;font-size:12px}.table th,.table td{text-align:left;padding:8px;border-bottom:1px solid var(--border)}.table th{color:var(--muted);font-weight:500}
+    .footer{padding:18px;color:var(--muted);font-size:11px;text-align:center}.pill{font-size:11px;padding:3px 6px;border-radius:5px;background:var(--panel2)}
+    @media(max-width:900px){.layout{grid-template-columns:1fr}.side{display:flex;overflow:auto;border-right:0;border-bottom:1px solid var(--border);gap:4px}.side h4{display:none}.watch{min-width:120px}.grid{grid-template-columns:1fr}.right{display:grid;grid-template-columns:1fr 1fr}.chartbox{height:420px}}
+    @media(max-width:600px){.right{display:flex}.stats{grid-template-columns:repeat(2,1fr)}.hero{flex-wrap:wrap}.signal{margin-left:0}.top{gap:8px}.status{display:none}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">MARKET<span>SIGNAL</span> PRO</div>
+    <div id="status" class="status">Connecting to market data…</div>
+    <div class="spacer"></div>
+    <select id="interval" class="select">
+      <option value="1m">1m</option><option value="5m">5m</option><option value="15m" selected>15m</option>
+      <option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option>
+    </select>
+    <button id="refresh" class="btn">Refresh</button>
+  </header>
+  <div class="layout">
+    <aside class="side">
+      <h4>Markets</h4>
+      <button class="watch active" data-symbol="BTCUSDT">BTC/USDT <small>Crypto</small></button>
+      <button class="watch" data-symbol="ETHUSDT">ETH/USDT <small>Crypto</small></button>
+      <button class="watch" data-symbol="SOLUSDT">SOL/USDT <small>Crypto</small></button>
+      <h4>Stocks / ETFs</h4>
+      <button class="watch" data-symbol="SPY">SPY <small>ETF</small></button>
+      <button class="watch" data-symbol="QQQ">QQQ <small>ETF</small></button>
+      <button class="watch" data-symbol="DIA">DIA <small>ETF</small></button>
+      <button class="watch" data-symbol="AAPL">AAPL <small>Stock</small></button>
+      <button class="watch" data-symbol="MSFT">MSFT <small>Stock</small></button>
+      <button class="watch" data-symbol="NVDA">NVDA <small>Stock</small></button>
+      <button class="watch" data-symbol="AMZN">AMZN <small>Stock</small></button>
+      <button class="watch" data-symbol="GOOGL">GOOGL <small>Stock</small></button>
+      <button class="watch" data-symbol="META">META <small>Stock</small></button>
+      <button class="watch" data-symbol="TSLA">TSLA <small>Stock</small></button>
+      <button class="watch" data-symbol="AMD">AMD <small>Stock</small></button>
+      <button class="watch" data-symbol="JPM">JPM <small>Stock</small></button>
+    </aside>
+    <main>
+      <section class="hero">
+        <div><div id="symbol" class="symbol">BTC/USDT</div><div id="lastUpdate" class="muted">—</div></div>
+        <div id="price" class="price">—</div><div id="change" class="chg">—</div>
+        <div class="signal"><b id="signal">—</b><small id="confidence">Confidence —</small></div>
+      </section>
+      <div class="grid">
+        <section>
+          <div class="card">
+            <div class="cardhead">
+              <div class="tabs">
+                <button class="active" data-tab="chart">Chart</button>
+                <button data-tab="backtest">Backtest</button>
+                <button data-tab="alerts">Alerts</button>
+              </div>
+              <div class="spacer"></div>
+              <div class="controls">
+                <button class="tf active" data-tf="price">Price</button>
+                <button class="tf" data-tf="ema">EMA</button>
+              </div>
+            </div>
+            <div id="chartTab">
+              <div class="chartbox"><canvas id="chart"></canvas></div>
+              <div class="stats">
+                <div class="stat"><small>RSI 14</small><b id="rsi">—</b></div>
+                <div class="stat"><small>MACD Hist</small><b id="macd">—</b></div>
+                <div class="stat"><small>ATR 14</small><b id="atr">—</b></div>
+                <div class="stat"><small>EMA 200</small><b id="ema200">—</b></div>
+              </div>
+            </div>
+            <div id="backtestTab" class="panelbody" style="display:none">
+              <button id="runBacktest" class="btn">Run 200-candle backtest</button>
+              <div id="backtestResult" class="note" style="margin-top:12px">Client-side backtest uses the same signal engine as the dashboard. Results are historical simulations, not guarantees.</div>
+              <div id="tradeTable" style="margin-top:10px"></div>
+            </div>
+            <div id="alertsTab" class="panelbody" style="display:none">
+              <h3 style="margin-top:0">Browser Alert</h3>
+              <p class="note">The alert runs in this browser while this page remains open. It does not require a server.</p>
+              <div class="controls">
+                <select id="alertDirection" class="select"><option>LONG</option><option>SHORT</option></select>
+                <select id="alertThreshold" class="select"><option value="60">60%+</option><option value="70">70%+</option><option value="80">80%+</option><option value="90">90%+</option></select>
+                <button id="armAlert" class="btn">Arm alert</button>
+              </div>
+              <p id="alertStatus" class="note"></p>
+            </div>
+          </div>
+        </section>
+        <aside class="right">
+          <div class="card"><div class="cardhead"><b>Signal Engine</b></div><div class="rows" id="signalRows"></div></div>
+          <div class="card"><div class="cardhead"><b>Market Data</b></div><div class="panelbody"><div class="note">Crypto data is pulled directly from Binance's public market-data endpoints. Stock/ETF data uses Stooq's public CSV endpoint where available. No API key or backend is required.</div></div></div>
+        </aside>
+      </div>
+      <div class="footer">Market Signal Pro · Educational market-analysis dashboard · Signals are algorithmic indicators, not financial advice.</div>
+    </main>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+let symbol="BTCUSDT", interval="15m", candles=[], chart, emaOn=false, alertCfg=null;
+const crypto=s=>["BTCUSDT","ETHUSDT","SOLUSDT"].includes(s);
+
+function fmt(n){if(n==null||Number.isNaN(n))return"—"; return Math.abs(n)>=1000?n.toLocaleString(undefined,{maximumFractionDigits:2}):n.toFixed(n<10?4:2)}
+function sma(a,n,i){if(i<n-1)return null;let x=0;for(let j=i-n+1;j<=i;j++)x+=a[j];return x/n}
+function ema(a,n){let out=[],k=2/(n+1),prev=a[0];out[0]=prev;for(let i=1;i<a.length;i++){prev=a[i]*k+prev*(1-k);out[i]=prev}return out}
+function rsi(a,n=14){let out=Array(a.length).fill(null),g=0,l=0;for(let i=1;i<=n;i++){let d=a[i]-a[i-1];if(d>0)g+=d;else l-=d}let ag=g/n,al=l/n;out[n]=al===0?100:100-100/(1+ag/al);for(let i=n+1;i<a.length;i++){let d=a[i]-a[i-1],gg=Math.max(d,0),ll=Math.max(-d,0);ag=(ag*(n-1)+gg)/n;al=(al*(n-1)+ll)/n;out[i]=al===0?100:100-100/(1+ag/al)}return out}
+function atr(cs,n=14){let tr=cs.map((c,i)=>i?Math.max(c.h-c.l,Math.abs(c.h-c.c[0]),Math.abs(c.l-c.c[0])):c.h-c.l),out=Array(cs.length).fill(null);let s=0;for(let i=0;i<tr.length;i++){s+=tr[i];if(i>=n)s-=tr[i-n];if(i>=n-1)out[i]=s/n}return out}
+function macd(a){let e12=ema(a,12),e26=ema(a,26),m=a.map((_,i)=>e12[i]-e26[i]),sig=ema(m,9);return m.map((x,i)=>x-sig[i])}
+function bb(a,n=20,k=2){let up=Array(a.length).fill(null),lo=Array(a.length).fill(null);for(let i=n-1;i<a.length;i++){let av=sma(a,n,i),v=0;for(let j=i-n+1;j<=i;j++)v+=(a[j]-av)**2;let sd=Math.sqrt(v/n);up[i]=av+k*sd;lo[i]=av-k*sd}return [up,lo]}
+function engine(cs){
+  let c=cs.map(x=>x.c), e9=ema(c,9),e21=ema(c,21),e50=ema(c,50),e200=ema(c,200),R=rsi(c),M=macd(c),[bu,bl]=bb(c), A=atr(cs);
+  let i=c.length-1,score=50, reasons=[];
+  const add=(v,txt)=>{score+=v;reasons.push([txt,v])};
+  if(e9[i]>e21[i])add(8,"EMA 9 > EMA 21");else add(-8,"EMA 9 < EMA 21");
+  if(c[i]>e50[i])add(8,"Price > EMA 50");else add(-8,"Price < EMA 50");
+  if(c[i]>e200[i])add(6,"Price > EMA 200");else add(-6,"Price < EMA 200");
+  if(R[i]>55)add(6,"RSI bullish");else if(R[i]<45)add(-6,"RSI bearish");else reasons.push(["RSI neutral",0]);
+  if(M[i]>0)add(6,"MACD histogram positive");else add(-6,"MACD histogram negative");
+  if(bu[i]&&bl[i]){let p=(c[i]-bl[i])/(bu[i]-bl[i]);if(p>.65)add(4,"Upper Bollinger zone");else if(p<.35)add(-4,"Lower Bollinger zone");else reasons.push(["Bollinger neutral",0])}
+  let hi=-Infinity,lo=Infinity;for(let j=Math.max(0,i-20);j<i;j++){hi=Math.max(hi,c[j]);lo=Math.min(lo,c[j])}
+  if(c[i]>hi)add(10,"20-bar breakout");else if(c[i]<lo)add(-10,"20-bar breakdown");
+  let avg=sma(cs.map(x=>x.v),20,i);if(avg&&cs[i].v>avg)add(2,"Volume confirmation");
+  score=Math.max(0,Math.min(100,score));let sig=score>=62?"LONG":score<=38?"SHORT":"NEUTRAL",conf=Math.round(Math.abs(score-50)*2);
+  return {score,sig,conf,R,M,A,e9,e21,e50,e200,bu,bl,reasons}
+}
+function binanceLimit(){return interval==="1d"?300:interval==="4h"?300:interval==="1h"?400:500}
+async function loadCrypto(){
+  let url=`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${binanceLimit()}`;
+  let res=await fetch(url);if(!res.ok)throw Error("Binance request failed");
+  let data=await res.json();candles=data.map(x=>({t:x[0],o:+x[1],h:+x[2],l:+x[3],c:+x[4],v:+x[5]}));
+}
+async function loadStock(){
+  // Stooq daily CSV is public and needs no key. Intraday stock data is not reliably available without a paid/provider key.
+  let st=symbol.toLowerCase()+".us";
+  let res=await fetch(`https://stooq.com/q/d/l/?s=${st}&d1=20220101&i=d`);
+  if(!res.ok)throw Error("Stock data request failed");
+  let txt=await res.text(), lines=txt.trim().split(/\\r?\\n/).slice(1);
+  candles=lines.map(x=>{let p=x.split(",");return {t:new Date(p[0]).getTime(),o:+p[1],h:+p[2],l:+p[3],c:+p[4],v:+p[5]}}).filter(x=>x.c>0).slice(-300);
+}
+function render(){
+  if(!candles.length)return;let e=engine(candles),i=candles.length-1,c=candles[i];
+  $("symbol").textContent=crypto(symbol)?symbol.replace("USDT","/USDT"):symbol;
+  $("price").textContent="$"+fmt(c.c);let prev=candles[Math.max(0,i-1)].c,ch=(c.c/prev-1)*100;
+  $("change").textContent=(ch>=0?"+":"")+ch.toFixed(2)+"%";$("change").className="chg "+(ch>=0?"green":"red");
+  $("signal").textContent=e.sig;$("signal").className=e.sig==="LONG"?"green":e.sig==="SHORT"?"red":"";
+  $("confidence").textContent=`Confidence ${e.conf}%`; $("lastUpdate").textContent=new Date(c.t).toLocaleString();
+  $("rsi").textContent=fmt(e.R[i]);$("macd").textContent=fmt(e.M[i]);$("atr").textContent=fmt(e.A[i]);$("ema200").textContent="$"+fmt(e.e200[i]);
+  $("signalRows").innerHTML=e.reasons.map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[1]>0?'green':x[1]<0?'red':''}">${x[1]>0?"+":""}${x[1]}</b></div>`).join("")+
+    `<div class="row"><span>Score</span><b>${e.score.toFixed(1)}/100</b></div>`;
+  draw(e);
+  if(alertCfg && e.sig===alertCfg.dir && e.conf>=alertCfg.min) triggerAlert(e);
+  $("status").textContent=`Live data · ${crypto(symbol)?"Binance":"Stooq"} · ${candles.length} candles`;
+}
+function draw(e){
+  if(chart)chart.destroy();let ctx=$("chart").getContext("2d");
+  let labels=candles.map(x=>x.t), datasets=[{label:"Close",data:candles.map(x=>({x:x.t,y:x.c})),borderWidth:1.5,pointRadius:0,tension:.08}];
+  if(emaOn){datasets.push({label:"EMA 21",data:candles.map((x,i)=>({x:x.t,y:e.e21[i]})),borderWidth:1,pointRadius:0});datasets.push({label:"EMA 50",data:candles.map((x,i)=>({x:x.t,y:e.e50[i]})),borderWidth:1,pointRadius:0});datasets.push({label:"EMA 200",data:candles.map((x,i)=>({x:x.t,y:e.e200[i]})),borderWidth:1,pointRadius:0})}
+  chart=new Chart(ctx,{type:"line",data:{datasets},options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:"index",intersect:false},plugins:{legend:{labels:{color:"#8b96a7",boxWidth:12}},tooltip:{mode:"index",intersect:false}},scales:{x:{type:"time",time:{unit:crypto(symbol)&&interval!=="1d"?"hour":"day"},ticks:{color:"#6f7a8b",maxTicksLimit:10},grid:{color:"#202733"}},y:{ticks:{color:"#6f7a8b"},grid:{color:"#202733"}}}}});
+}
+function triggerAlert(e){
+  if(!alertCfg)return;let key=symbol+alertCfg.dir+alertCfg.min;
+  if(localStorage.getItem("lastAlertKey")===key)return;localStorage.setItem("lastAlertKey",key);
+  if("Notification"in window&&Notification.permission==="granted")new Notification(`${symbol}: ${e.sig} ${e.conf}% confidence`);
+  $("alertStatus").textContent=`Triggered: ${e.sig} at ${e.conf}% confidence.`;
+}
+async function refresh(){try{ $("status").textContent="Loading…";crypto(symbol)?await loadCrypto():await loadStock();render()}catch(err){$("status").textContent="Data error: "+err.message;console.error(err)}}
+function runBacktest(){
+  if(candles.length<80)return;$("backtestResult").textContent="Running…";let eq=10000,pos=0,entry=0,trades=[];
+  for(let i=60;i<candles.length;i++){let slice=candles.slice(0,i+1),e=engine(slice),p=candles[i].c;
+    if(!pos&&e.conf>=70&&e.sig==="LONG"){pos=1;entry=p}
+    else if(!pos&&e.conf>=70&&e.sig==="SHORT"){pos=-1;entry=p}
+    else if(pos&&((pos===1&&e.sig==="SHORT")||(pos===-1&&e.sig==="LONG"))){let r=pos===1?p/entry-1:entry/p-1;eq*=1+r;trades.push({dir:pos===1?"LONG":"SHORT",entry,exit:p,r:r*100});pos=0}
+  }
+  if(pos){let p=candles.at(-1).c,r=pos===1?p/entry-1:entry/p-1;eq*=1+r;trades.push({dir:pos===1?"LONG":"SHORT",entry,exit:p,r:r*100})}
+  let wins=trades.filter(x=>x.r>0).length,ret=(eq/10000-1)*100,avg=trades.reduce((a,x)=>a+x.r,0)/(trades.length||1);
+  $("backtestResult").innerHTML=`<b>Return:</b> ${ret.toFixed(2)}% · <b>Final equity:</b> $${eq.toFixed(2)} · <b>Trades:</b> ${trades.length} · <b>Win rate:</b> ${(wins/(trades.length||1)*100).toFixed(1)}% · <b>Avg trade:</b> ${avg.toFixed(2)}%`;
+  $("tradeTable").innerHTML=trades.slice(-12).reverse().map(t=>`<div class="row"><span>${t.dir} · ${new Date(candles.find(x=>x.c===t.entry)?.t||0).toLocaleDateString()}</span><b class="${t.r>=0?'green':'red'}">${t.r>=0?"+":""}${t.r.toFixed(2)}%</b></div>`).join("");
+}
+document.querySelectorAll(".watch").forEach(b=>b.onclick=()=>{document.querySelectorAll(".watch").forEach(x=>x.classList.remove("active"));b.classList.add("active");symbol=b.dataset.symbol;refresh()});
+$("interval").onchange=e=>{interval=e.target.value;refresh()};
+$("refresh").onclick=refresh;
+document.querySelectorAll(".tf").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tf").forEach(x=>x.classList.remove("active"));b.classList.add("active");emaOn=b.dataset.tf==="ema";render()});
+document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-tab]").forEach(x=>x.classList.remove("active"));b.classList.add("active");["chart","backtest","alerts"].forEach(t=>$(`${t}Tab`).style.display=t===b.dataset.tab?"":"none")});
+$("runBacktest").onclick=runBacktest;
+$("armAlert").onclick=async()=>{if("Notification"in window&&Notification.permission==="default")await Notification.requestPermission();alertCfg={dir:$("alertDirection").value,min:+$("alertThreshold").value};$("alertStatus").textContent=`Armed for ${alertCfg.dir} at ${alertCfg.min}% confidence. Keep this page open for browser-side monitoring.`};
+refresh();setInterval(refresh,60000);
+</script>
+</body>
+</html>
