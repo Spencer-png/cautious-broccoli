@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Market Signal Pro · Live Crypto</title>
-  <meta name="description" content="Live crypto candlestick chart, walk-forward validated prediction engine and a self-learning $1,000 paper-trading bot. Pure static, no backend." />
+  <meta name="description" content="Live crypto candlestick chart, walk-forward validated prediction engine and a self-learning $1,000,000 paper-trading bot. Pure static, no backend." />
   <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
   <script>window.LightweightCharts||document.write('<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"><\/script>')</script>
   <style>
@@ -139,12 +139,12 @@
 
             <div id="botTab" style="display:none">
               <div class="cardhead" style="border-top:0">
-                <b>$1,000 paper account</b>
+                <b>$1,000,000 paper account</b>
                 <span id="botMode" class="pill">idle</span>
                 <div class="spacer"></div>
                 <div class="controls">
                   <button id="botToggle" class="btn go">Pause</button>
-                  <button id="botReset" class="btn danger">Reset to $1,000</button>
+                  <button id="botReset" class="btn danger">Reset to $1,000,000</button>
                 </div>
               </div>
               <div class="bigstat">
@@ -194,7 +194,7 @@
 
             <div id="backtestTab" style="display:none">
               <div class="panelbody">
-                <div class="note">Bootstrap walk-forward: the same bot rules replayed bar by bar over the loaded history, starting at $1,000. This is what the bot learned its parameters from, and it contains no look-ahead — each bar only sees resolved outcomes.</div>
+                <div class="note">Bootstrap walk-forward: the same bot rules replayed bar by bar over the loaded history, starting at $1,000,000. This is what the bot learned its parameters from, and it contains no look-ahead — each bar only sees resolved outcomes.</div>
               </div>
               <div class="bigstat" style="padding-top:0">
                 <div class="s"><small>Final equity</small><b id="bkEquity">—</b></div>
@@ -691,7 +691,7 @@ function calibration(recs,bins){
 }
 
 /* ---------- paper-trading bot ---------- */
-const FEE=.0005, SLIP=.0002, START=1000;
+const FEE=.0005, SLIP=.0002, START=1000000;
 const RISK_BASE=.01, RISK_MAX=.02, NOTIONAL_CAP=.25, MIN_NOTIONAL=5;
 /* Stop and target are symmetric, so the model's barrier probability IS the trade's win
    probability. Entry selectivity is a percentile of recent conviction rather than a fixed
@@ -1462,13 +1462,16 @@ function drawTradeMarks(){
 
 /* ---------- bot persistence + live loop ---------- */
 function botKey(){return LS("bot."+symbol+"."+interval)}
+/* v3: starting equity moved from $1,000 to $1,000,000. Older saves are discarded on load
+   so a refresh after this change (or Reset) always boots a fresh $1M account. */
+const BOT_STORE_V=3;
 function loadLiveBot(){
   let b=null;
   try{
     const raw=localStorage.getItem(botKey());
     if(raw){
       const j=JSON.parse(raw);
-      if(j&&j.v===2)b=j.bot;
+      if(j&&j.v===BOT_STORE_V&&j.bot&&j.bot.start===ENG.START)b=j.bot;
     }
   }catch(e){}
   if(!b){b=ENG.newBot();b.paused=false}
@@ -1483,7 +1486,7 @@ function saveLiveBot(){
     const slim=Object.assign({},liveBot,{
       trades:liveBot.trades.slice(-300),curve:liveBot.curve.slice(-600),pending:[]
     });
-    localStorage.setItem(botKey(),JSON.stringify({v:2,bot:slim}));
+    localStorage.setItem(botKey(),JSON.stringify({v:BOT_STORE_V,bot:slim}));
   }catch(e){}
 }
 /* the live account stores only its OWN learning deltas; decisions use bootstrap + live combined */
@@ -1980,6 +1983,7 @@ document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{
 $("botToggle").onclick=()=>{liveBot.paused=!liveBot.paused;saveLiveBot();renderBot()};
 $("botReset").onclick=()=>{
   const paused=liveBot?liveBot.paused:false;
+  try{localStorage.removeItem(botKey())}catch(e){}
   liveBot=ENG.newBot();liveBot.paused=paused;
   saveLiveBot();renderBot();drawTradeMarks();
 };
