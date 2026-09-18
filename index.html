@@ -22,6 +22,10 @@
     .side{border-right:1px solid var(--border);padding:12px;background:#0d1118}.side h4{font-size:11px;color:var(--muted);margin:6px 8px 7px;text-transform:uppercase;letter-spacing:.9px}
     .watch{width:100%;border:1px solid transparent;background:transparent;color:var(--text);display:flex;align-items:center;gap:8px;padding:8px;border-radius:7px;text-align:left;margin-bottom:2px}
     .watch:hover,.watch.active{background:var(--panel2);border-color:var(--border)}.watch .nm{font-weight:600;font-size:13px}.watch .px{margin-left:auto;text-align:right;font-size:12px}.watch .px small{display:block;font-size:11px}
+    .bookgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+    .bookcard{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:10px}
+    .bookcard .nm{font-weight:700;font-size:13px}.bookcard .st{font-size:12px;margin-top:4px}.bookcard .meta{font-size:11px;color:var(--muted);margin-top:3px}
+    @media(max-width:900px){.bookgrid{grid-template-columns:1fr}}
     main{padding:16px;min-width:0}.hero{display:flex;align-items:center;gap:20px;margin-bottom:14px;flex-wrap:wrap}
     .symbol{font-size:23px;font-weight:800}.price{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}.chg{font-size:13px}
     .green{color:var(--green)}.red{color:var(--red)}.muted{color:var(--muted)}.yellow{color:var(--yellow)}.blue{color:var(--blue)}
@@ -78,7 +82,7 @@
   </header>
   <div class="layout">
     <aside class="side">
-      <h4>Crypto markets</h4>
+      <h4>BTC · ETH · SOL</h4>
       <div id="watchlist"></div>
     </aside>
     <main>
@@ -139,7 +143,7 @@
 
             <div id="botTab" style="display:none">
               <div class="cardhead" style="border-top:0">
-                <b>$1,000,000 paper account</b>
+                <b>$1,000,000 book · BTC ETH SOL</b>
                 <span id="botMode" class="pill">idle</span>
                 <div class="spacer"></div>
                 <div class="controls">
@@ -147,10 +151,14 @@
                   <button id="botReset" class="btn danger">Reset to $1,000,000</button>
                 </div>
               </div>
+              <div class="panelbody" style="padding-bottom:0">
+                <div class="note" style="margin-bottom:8px">One paper account. It watches BTC, ETH and SOL on this interval, can hold live positions on all three at once, and sizes each bet from remaining cash — up to the full free balance on a setup it likes.</div>
+                <div id="botBooks"></div>
+              </div>
               <div class="bigstat">
                 <div class="s"><small>Equity</small><b id="botEquity">—</b></div>
                 <div class="s"><small>Total return</small><b id="botReturn">—</b></div>
-                <div class="s"><small>Open position</small><b id="botPos">flat</b></div>
+                <div class="s"><small>Open positions</small><b id="botPos">flat</b></div>
                 <div class="s"><small>Unrealized P&amp;L</small><b id="botUnreal">—</b></div>
                 <div class="s"><small>Closed trades</small><b id="botTrades">—</b></div>
                 <div class="s"><small>Win rate</small><b id="botWin">—</b></div>
@@ -692,7 +700,7 @@ function calibration(recs,bins){
 
 /* ---------- paper-trading bot ---------- */
 const FEE=.0005, SLIP=.0002, START=1000000;
-const RISK_BASE=.01, RISK_MAX=.02, NOTIONAL_CAP=.25, MIN_NOTIONAL=5;
+const MIN_NOTIONAL=5;
 /* Stop and target are symmetric, so the model's barrier probability IS the trade's win
    probability. Entry selectivity is a percentile of recent conviction rather than a fixed
    probability: a well-calibrated model on near-random data sits very close to 0.5, and a
@@ -702,7 +710,7 @@ const ARMS=(function(){
   [80,90,95].forEach(q=>[.8,1.2,1.8].forEach(k=>out.push({q:q,stopMult:k,targetMult:k})));
   return out;
 })();
-const DEFAULT_PARAMS={q:90,stopMult:1.2,targetMult:1.2,sizeMult:1};
+const DEFAULT_PARAMS={q:80,stopMult:1.2,targetMult:1.2,sizeMult:1};
 const BUCKET_PRIOR=12, BUCKET_VETO=-.09, BUCKET_MIN_N=8;
 
 function newLearn(){
@@ -749,15 +757,44 @@ function pickArm(learn){
   if(!best)return Object.assign({},DEFAULT_PARAMS);
   return{q:best.q,stopMult:best.stopMult,targetMult:best.targetMult,sizeMult:1};
 }
-/* risk-per-trade sizing scaled by the model edge, capped at a quarter of equity */
-function sizeFor(equity,pl,params,mult){
-  const risk=clamp(RISK_BASE*(.5+Math.max(pl.kelly,0)/.04)*params.sizeMult*mult,.002,RISK_MAX);
-  return Math.min(equity*NOTIONAL_CAP,risk*equity*pl.entry/Math.max(pl.stopD,1e-9));
+function usedNotional(bot){
+  let u=0;
+  if(bot.positions){for(const k in bot.positions){const p=bot.positions[k];if(p)u+=p.entry*p.qty}}
+  else if(bot.pos)u+=bot.pos.entry*bot.pos.qty;
+  return u;
+}
+function freeCash(bot){return Math.max(0,bot.equity-usedNotional(bot))}
+/* Full remaining cash is available. Kelly (and learned sizeMult) pick how much of that
+   free balance to put on this name — 10% floor so it actually takes the trade, 100% ceiling. */
+function sizeFor(equity,pl,params,mult,free){
+  const cap=Math.max(0,free!=null?free:(equity||0));
+  const k=clamp(Math.max(pl.kelly,.1)*(params.sizeMult||1)*(mult||1),.1,1);
+  return Math.min(cap,k*cap);
+}
+function getPos(bot,sym){
+  if(bot.positions)return bot.positions[sym]||null;
+  return bot.pos||null;
+}
+function setPos(bot,sym,p){
+  if(bot.positions){if(p)bot.positions[sym]=p;else delete bot.positions[sym]}
+  else bot.pos=p;
+}
+function learnOf(bot,sym){
+  if(sym&&bot.learns){
+    if(!bot.learns[sym])bot.learns[sym]=newLearn();
+    return bot.learns[sym];
+  }
+  return bot.learn;
 }
 function newBot(){
-  return{equity:START,start:START,peak:START,maxDD:0,pos:null,trades:[],curve:[],
+  return{equity:START,start:START,peak:START,maxDD:0,pos:null,positions:null,learns:null,trades:[],curve:[],
     learn:newLearn(),params:Object.assign({},DEFAULT_PARAMS),feesPaid:0,
     firstT:null,firstPx:null,lastT:null,lastPx:null,pending:[]};
+}
+function newBook(){
+  const b=newBot();
+  b.positions={};b.learns={};b.lastTs={};b.lastPxs={};
+  return b;
 }
 function kellyFrac(pWin,rr){
   const k=(pWin*(rr+1)-1)/rr;
@@ -766,7 +803,7 @@ function kellyFrac(pWin,rr){
 /* round-trip friction, and the rule that a target must be worth at least 3x paying it:
    at a 1-bar horizon on fast intervals the average move is smaller than the fees, so
    trading there is a guaranteed loss no matter how good the signal is */
-const ROUND_TRIP=2*(FEE+SLIP), COST_MULT=3;
+const ROUND_TRIP=2*(FEE+SLIP), COST_MULT=1;
 function costOk(tgtD,px){return px>0&&(tgtD/px)>=COST_MULT*ROUND_TRIP}
 function planFor(cp,atr,px,params){
   const side=cp>=.5?1:-1;
@@ -779,7 +816,7 @@ function planFor(cp,atr,px,params){
     target:side>0?entry+tgtD:entry-tgtD,
     stopD:stopD,tgtD:tgtD,kelly:kellyFrac(pWin,rr)};
 }
-function closeTrade(bot,pos,px,reason,t,learn){
+function closeTrade(bot,pos,px,reason,t,learn,sym){
   const exitPx=pos.side>0?px*(1-SLIP):px*(1+SLIP);
   const gross=pos.side*(exitPx-pos.entry)*pos.qty;
   const fees=(pos.entry*pos.qty+exitPx*pos.qty)*FEE;
@@ -792,16 +829,21 @@ function closeTrade(bot,pos,px,reason,t,learn){
   bot.maxDD=Math.max(bot.maxDD,bot.peak>0?(bot.peak-bot.equity)/bot.peak:0);
   const tr={t0:pos.t0,t1:t,side:pos.side,entry:pos.entry,exit:exitPx,qty:pos.qty,
     notional:pos.entry*pos.qty,fees:fees,pnl:pnl,pct:pnl/eqBefore*100,R:R,
-    reasonIn:pos.reasonIn,reasonOut:reason,bars:pos.bars,equity:bot.equity,pEntry:pos.pEntry};
+    reasonIn:pos.reasonIn,reasonOut:reason,bars:pos.bars,equity:bot.equity,pEntry:pos.pEntry,
+    symbol:sym||pos.symbol||null};
   bot.trades.push(tr);
-  const L=learn||bot.learn;
+  const L=learn||learnOf(bot,sym||pos.symbol);
   L.all.n++;L.all.sumR+=R;L.all.sumPnl+=pnl;if(pnl>0)L.all.wins++;
   L.exits[reason]=(L.exits[reason]||0)+1;
+  if(bot.learn&&L!==bot.learn){
+    bot.learn.all.n++;bot.learn.all.sumR+=R;bot.learn.all.sumPnl+=pnl;if(pnl>0)bot.learn.all.wins++;
+    bot.learn.exits[reason]=(bot.learn.exits[reason]||0)+1;
+  }
   if(pos.keys)for(const fam in pos.keys){
     const b=bucketOf(fam,L,pos.keys[fam]);
     b.n++;b.sumR+=R;b.sumPnl+=pnl;if(pnl>0)b.wins++;
   }
-  bot.pos=null;
+  setPos(bot,sym||pos.symbol,null);
   return tr;
 }
 /* shadow arms: same rules, independent equity, used to learn parameters from realized P&L */
@@ -829,7 +871,7 @@ function stepArms(learn,bar,cp,atr,H,edgeOk,thr){
     }
     if(!a.pos&&edgeOk&&atr>0&&a.equity>MIN_NOTIONAL&&Math.abs(cp-.5)>=thr[a.q]){
       const pl=planFor(cp,atr,bar.c,a);
-      const notional=sizeFor(a.equity,pl,DEFAULT_PARAMS,1);
+      const notional=sizeFor(a.equity,pl,DEFAULT_PARAMS,1,a.equity);
       if(notional>=MIN_NOTIONAL&&costOk(pl.tgtD,bar.c))
         a.pos={side:pl.side,entry:pl.entry,qty:notional/pl.entry,stop:pl.stop,target:pl.target,stopD:pl.stopD,bars:0};
     }
@@ -838,12 +880,17 @@ function stepArms(learn,bar,cp,atr,H,edgeOk,thr){
 /* one bar of the real bot. Uses only bar i data + already-resolved outcomes. */
 function botStep(bot,ctx){
   const {i,cs,I,cp,H,intraday,paused,edgeOk,zs}=ctx;
+  const sym=ctx.sym||null;
   const thr=ctx.thr||{80:.01,90:.02,95:.03};
   const bar=cs[i],atr=I.atr[i];
+  const Lrn=learnOf(bot,sym);
   if(bot.firstT==null){bot.firstT=bar.t;bot.firstPx=bar.c}
   bot.lastT=bar.t;bot.lastPx=bar.c;
-  if(bot.pos){
-    const p=bot.pos;p.bars++;
+  if(bot.lastTs&&sym)bot.lastTs[sym]=bar.t;
+  if(bot.lastPxs&&sym)bot.lastPxs[sym]=bar.c;
+  let p=getPos(bot,sym);
+  if(p){
+    p.bars++;
     let ex=null,px=0;
     if(p.side>0){
       if(bar.l<=p.stop){ex="stop";px=p.stop}
@@ -855,63 +902,79 @@ function botStep(bot,ctx){
     if(!ex&&p.bars>=H){ex="horizon";px=bar.c}
     if(!ex&&((p.side>0&&cp<.44)||(p.side<0&&cp>.56))){ex="signal";px=bar.c}
     if(ex){
-      const tr=closeTrade(bot,p,px,ex,bar.t);
-      /* cost-sensitive feedback: lossy setups get re-taught harder, using the realized direction */
+      const tr=closeTrade(bot,p,px,ex,bar.t,Lrn,sym);
       if(zs&&p.zIdx!=null&&zs[p.zIdx]){
         const y=tr.exit>tr.entry?1:0;
-        bot.pending.push({z:zs[p.zIdx],y:y,w:tr.pnl<0?1+Math.min(2*Math.abs(tr.R),3):1});
+        bot.pending.push({z:zs[p.zIdx],y:y,w:tr.pnl<0?1+Math.min(2*Math.abs(tr.R),3):1,sym:sym});
       }
+      p=null;
     }
   }
-  stepArms(bot.learn,bar,cp,atr,H,edgeOk,thr);
-  const arm=pickArm(bot.learn);
-  const gN=bot.learn.all.n,gR=bot.learn.all.sumR;
-  arm.sizeMult=clamp(1+1.8*(gR/(gN+15)),.25,1.5);
+  const armsEdge=ctx.freeTrade?true:!!edgeOk;
+  stepArms(Lrn,bar,cp,atr,H,armsEdge,thr);
+  const arm=pickArm(Lrn);
+  const gN=Lrn.all.n,gR=Lrn.all.sumR;
+  arm.sizeMult=clamp(1+1.8*(gR/(gN+15)),.25,2.5);
   arm.pThresh=.5+thr[arm.q];
   bot.params=arm;
-  /* Learned from its own money. Current form is judged on the last 40 closed trades, not on
-     all-time results, so a bad patch throttles the bot without condemning it forever; the
-     shadow arms keep trading virtually the whole time so it can come back. */
-  const recent=bot.trades.length>40?bot.trades.slice(-40):bot.trades;
-  let rn=recent.length,rR=0;
-  for(const t of recent)rR+=t.R;
+  const recent=bot.trades.filter(t=>!sym||t.symbol===sym||!t.symbol);
+  const rec=recent.length>40?recent.slice(-40):recent;
+  let rn=rec.length,rR=0;
+  for(const t of rec)rR+=t.R;
   const rShr=rR/(rn+15);
   let bestArm=-9;
-  for(const a of bot.learn.arms)if(a.n>=5)bestArm=Math.max(bestArm,a.sumR/(a.n+8));
-  bot.halted=(rn>=25&&rShr<-.12)||(rn>=25&&bestArm<-.15);
-  bot.probation=!bot.halted&&rn>=15&&rShr<-.05;
+  for(const a of Lrn.arms)if(a.n>=5)bestArm=Math.max(bestArm,a.sumR/(a.n+8));
+  if(!ctx.freeTrade){
+    bot.halted=(rn>=25&&rShr<-.12)||(rn>=25&&bestArm<-.15);
+    bot.probation=!bot.halted&&rn>=15&&rShr<-.05;
+  }else{bot.halted=false;bot.probation=false}
   bot.formR=rShr;
-  if(!bot.pos&&!paused&&edgeOk&&atr>0&&bot.equity>MIN_NOTIONAL&&!bot.halted){
+  const free=freeCash(bot);
+  const canEnter=ctx.freeTrade||(edgeOk&&!bot.halted);
+  if(!p&&!paused&&canEnter&&atr>0&&free>MIN_NOTIONAL){
     if(Math.abs(cp-.5)>=thr[arm.q]){
       const keys=bucketKeys(I,i,cp,intraday,thr);
-      let mult=bucketMult(bot.learn,keys);
-      if(bot.probation){
-        /* while losing, only setups with a positive record of their own are allowed */
+      let mult=bucketMult(Lrn,keys);
+      if(!ctx.freeTrade&&bot.probation){
         let good=true;
-        for(const fam in keys){const b=bot.learn.fam[fam][keys[fam]];if(!b||b.n<3||shrunkR(b)<=0)good=false}
+        for(const fam in keys){const b=Lrn.fam[fam][keys[fam]];if(!b||b.n<3||shrunkR(b)<=0)good=false}
         if(!good)mult=0;
       }
+      if(ctx.freeTrade&&mult===0)mult=.5;
       if(mult>0){
         const pl=planFor(cp,atr,bar.c,arm);
-        const notional=sizeFor(bot.equity,pl,arm,mult);
+        const notional=sizeFor(bot.equity,pl,arm,mult,free);
         if(notional>=MIN_NOTIONAL&&costOk(pl.tgtD,bar.c)){
-          bot.pos={side:pl.side,entry:pl.entry,qty:notional/pl.entry,stop:pl.stop,target:pl.target,
-            stopD:pl.stopD,bars:0,t0:bar.t,pEntry:cp,keys:keys,zIdx:i,
-            reasonIn:(pl.side>0?"long ":"short ")+(cp*100).toFixed(1)+"% p (top "+(100-arm.q)+"% conviction)"};
+          setPos(bot,sym,{side:pl.side,entry:pl.entry,qty:notional/pl.entry,stop:pl.stop,target:pl.target,
+            stopD:pl.stopD,bars:0,t0:bar.t,pEntry:cp,keys:keys,zIdx:i,symbol:sym,
+            reasonIn:(sym?sym.replace("USDT","")+" ":"")+(pl.side>0?"long ":"short ")+(cp*100).toFixed(1)+"% p (top "+(100-arm.q)+"% conviction)"});
         }
       }
     }
   }
-  bot.curve.push({t:bar.t,e:bot.equity+unreal(bot,bar.c)});
+  const u=ctx.prices?markToMarket(bot,ctx.prices):unreal(bot,bar.c,sym);
+  bot.curve.push({t:bar.t,e:bot.equity+u});
 }
-function unreal(bot,px){
-  const p=bot.pos;if(!p)return 0;
+function posPnl(p,px){
+  if(!p||px==null||!isFinite(px))return 0;
   const exitPx=p.side>0?px*(1-SLIP):px*(1+SLIP);
   return p.side*(exitPx-p.entry)*p.qty-(p.entry*p.qty+exitPx*p.qty)*FEE;
 }
+function unreal(bot,px,sym){
+  return posPnl(getPos(bot,sym),px);
+}
+function markToMarket(bot,prices){
+  if(!bot.positions)return unreal(bot,typeof prices==="number"?prices:0);
+  let u=0;
+  for(const s in bot.positions){
+    const px=prices&&prices[s];
+    if(px!=null)u+=posPnl(bot.positions[s],px);
+  }
+  return u;
+}
 /* live intrabar stop/target check against the streaming price */
-function tickCheck(bot,px,t,H){
-  const p=bot.pos;if(!p)return null;
+function tickCheck(bot,px,t,H,sym){
+  const p=getPos(bot,sym);if(!p)return null;
   let ex=null,hit=0;
   if(p.side>0){
     if(px<=p.stop){ex="stop";hit=p.stop}else if(px>=p.target){ex="target";hit=p.target}
@@ -919,7 +982,7 @@ function tickCheck(bot,px,t,H){
     if(px>=p.stop){ex="stop";hit=p.stop}else if(px<=p.target){ex="target";hit=p.target}
   }
   if(!ex)return null;
-  return closeTrade(bot,p,hit,ex,t);
+  return closeTrade(bot,p,hit,ex,t,learnOf(bot,sym),sym);
 }
 
 /* ---------- walk-forward driver ----------
@@ -1080,7 +1143,7 @@ function analyze(cs,opt){
     live.bandPct=[(Math.exp(live.mu-1.2816*live.sigH)-1)*100,(Math.exp(live.mu+1.2816*live.sigH)-1)*100];
     live.plan=planFor(r.p,I.atr[last],I.c[last],bot.params);
     live.plan.ev=live.plan.pWin*live.plan.rr-(1-live.plan.pWin);
-    live.plan.sizePct=sizeFor(START,live.plan,bot.params,1)/START*100;
+    live.plan.sizePct=sizeFor(START,live.plan,bot.params,1,START)/START*100;
     live.thr=r.thr||{80:.01,90:.02,95:.03};
     live.conv=Math.abs(r.p-.5);
     live.convThr=live.thr[bot.params.q];
@@ -1123,10 +1186,11 @@ function botStats(bot){
     pf:gl>0?gp/gl:(gp>0?Infinity:null),dd:bot.maxDD*100,
     sharpe:sd>0?mean/sd*Math.sqrt(Math.max(n,1)):null,avgBars:n?bars/n:null,fees:bot.feesPaid};
 }
-return{analyze:analyze,scoreLatest:scoreLatest,botStats:botStats,botStep:botStep,newBot:newBot,
-  tickCheck:tickCheck,closeTrade:closeTrade,unreal:unreal,planFor:planFor,bucketKeys:bucketKeys,
+return{analyze:analyze,scoreLatest:scoreLatest,botStats:botStats,botStep:botStep,newBot:newBot,newBook:newBook,
+  tickCheck:tickCheck,closeTrade:closeTrade,unreal:unreal,markToMarket:markToMarket,planFor:planFor,bucketKeys:bucketKeys,
   bucketMult:bucketMult,pickArm:pickArm,newLearn:newLearn,metrics:metrics,indicators:indicators,
   buildFeatures:buildFeatures,featureAt:featureAt,walkForward:walkForward,shrunkR:shrunkR,
+  getPos:getPos,setPos:setPos,learnOf:learnOf,freeCash:freeCash,usedNotional:usedNotional,sizeFor:sizeFor,
   FEATS:FEATS,DIM:DIM,WARM:WARM,ARMS:ARMS,FEE:FEE,SLIP:SLIP,START:START};
 })();
 /* ==================== ENGINE END ==================== */
@@ -1134,10 +1198,9 @@ return{analyze:analyze,scoreLatest:scoreLatest,botStats:botStats,botStep:botStep
 /* ==================== app: data, chart, UI ==================== */
 const $=id=>document.getElementById(id);
 const PAIRS=[
-  ["BTCUSDT","BTC/USDT"],["ETHUSDT","ETH/USDT"],["SOLUSDT","SOL/USDT"],["BNBUSDT","BNB/USDT"],
-  ["XRPUSDT","XRP/USDT"],["DOGEUSDT","DOGE/USDT"],["ADAUSDT","ADA/USDT"],["AVAXUSDT","AVAX/USDT"],
-  ["LINKUSDT","LINK/USDT"],["LTCUSDT","LTC/USDT"],["DOTUSDT","DOT/USDT"],["ATOMUSDT","ATOM/USDT"]
+  ["BTCUSDT","BTC/USDT"],["ETHUSDT","ETH/USDT"],["SOLUSDT","SOL/USDT"]
 ];
+const BOOK=PAIRS.map(p=>p[0]);
 const API_HOSTS=["https://data-api.binance.vision","https://api.binance.com","https://api.binance.us"];
 const WS_HOSTS=["wss://data-stream.binance.vision","wss://stream.binance.com:9443"];
 const STEP={"1m":60,"5m":300,"15m":900,"1h":3600,"4h":14400,"1d":86400};
@@ -1145,9 +1208,10 @@ const WANT=9000,MAXBARS=9200;
 const LS=k=>"msp.v2."+k;
 
 let symbol="BTCUSDT",interval="15m",candles=[],lastOpen=false,analysis=null;
-let apiHost=null,dataSource="binance",loadToken=0,busy=false;
-let ws=null,wsTries=0,wsTimer=null,pollTimer=null,recalcTimer=null,provTimer=null;
+let apiHost=null,dataSource="binance",loadToken=0,busy=false,busySym={};
+let ws=null,wsTries=0,wsTimer=null,pollTimer=null,recalcTimer=null,provTimer=null,warmTimer=null;
 let liveBot=null,alertCfg=null,tickers={};
+let market={};
 let overlays={ema:true,bb:false,fc:true,tr:true};
 let chart=null,S={},priceLines=[],fitted=false,lastTick=null,lastBotRender=0;
 
@@ -1254,8 +1318,9 @@ function stopPoll(){if(pollTimer){clearInterval(pollTimer);pollTimer=null}}
 function openStream(){
   closeStream();
   if(dataSource!=="binance"){startPoll(6000);setLive("warn","polling");return}
-  const s=symbol.toLowerCase();
-  const streams=[s+"@kline_"+interval,s+"@ticker"].concat(PAIRS.map(p=>p[0].toLowerCase()+"@miniTicker"));
+  const streams=BOOK.map(p=>p.toLowerCase()+"@kline_"+interval)
+    .concat(BOOK.map(p=>p.toLowerCase()+"@miniTicker"))
+    .concat([symbol.toLowerCase()+"@ticker"]);
   const host=WS_HOSTS[wsTries%WS_HOSTS.length];
   let sock;
   try{sock=new WebSocket(host+"/stream?streams="+streams.join("/"))}
@@ -1286,8 +1351,10 @@ function startPoll(ms){
   pollTimer=setInterval(async()=>{
     try{
       if(dataSource==="binance"){
-        const rows=await apiGet("/api/v3/klines?symbol="+symbol+"&interval="+interval+"&limit=2");
-        mapKlines(rows).forEach(b=>applyBar(b,b.t+STEP[interval]<=Date.now()/1000));
+        for(const s of BOOK){
+          const rows=await apiGet("/api/v3/klines?symbol="+s+"&interval="+interval+"&limit=2");
+          mapKlines(rows).forEach(b=>applyBar(s,b,b.t+STEP[interval]<=Date.now()/1000));
+        }
       }else{
         const r=await fetch("https://api.exchange.coinbase.com/products/"+symbol.replace(/USDT$/,"-USD")+"/ticker");
         if(r.ok){const j=await r.json();applyTick(+j.price)}
@@ -1297,42 +1364,49 @@ function startPoll(ms){
   },ms);
 }
 function onTicker(d){
-  const px=+d.c;
-  tickers[symbol]={px:px,chg:+d.P};
-  $("h24").textContent=fmtPx(+d.h);
-  $("l24").textContent=fmtPx(+d.l);
-  paintQuote(px,+d.P);
+  const px=+d.c,s=d.s||symbol;
+  tickers[s]={px:px,chg:+d.P};
+  if(s===symbol){
+    $("h24").textContent=fmtPx(+d.h);
+    $("l24").textContent=fmtPx(+d.l);
+    paintQuote(px,+d.P);
+  }
   renderWatchlist();
 }
 function onMini(d){
   const o=+d.o;
   tickers[d.s]={px:+d.c,chg:o>0?(+d.c/o-1)*100:0};
   renderWatchlist();
+  if(liveBot&&liveBot.positions&&liveBot.positions[d.s])onLivePrice(d.s,+d.c,Math.floor(Date.now()/1000));
 }
 function onKline(k){
-  applyBar({t:Math.floor(k.t/1000),o:+k.o,h:+k.h,l:+k.l,c:+k.c,v:+k.v,n:+k.n,tb:+k.V},!!k.x);
+  applyBar(k.s,{t:Math.floor(k.t/1000),o:+k.o,h:+k.h,l:+k.l,c:+k.c,v:+k.v,n:+k.n,tb:+k.V},!!k.x);
 }
-function applyBar(bar,closed){
-  if(!candles.length||!isFinite(bar.c))return;
-  const i=candles.length-1;
-  if(bar.t<candles[i].t)return;
-  if(bar.t===candles[i].t)candles[i]=bar;
-  else{candles.push(bar);if(candles.length>MAXBARS)candles.shift()}
-  lastOpen=!closed;
-  if(S.candle){S.candle.update(bar);S.vol.update(volPoint(bar))}
-  paintQuote(bar.c,null);
-  onLivePrice(bar.c,bar.t);
-  if(closed)scheduleRecalc(250);
+function applyBar(sym,bar,closed){
+  const mk=market[sym];
+  if(!mk||!mk.candles||!mk.candles.length||!isFinite(bar.c))return;
+  const arr=mk.candles,i=arr.length-1;
+  if(bar.t<arr[i].t)return;
+  if(bar.t===arr[i].t)arr[i]=bar;
+  else{arr.push(bar);if(arr.length>MAXBARS)arr.shift()}
+  mk.lastOpen=!closed;
+  if(sym===symbol){
+    candles=arr;lastOpen=mk.lastOpen;
+    if(S.candle){S.candle.update(bar);S.vol.update(volPoint(bar))}
+    paintQuote(bar.c,null);
+  }
+  onLivePrice(sym,bar.c,bar.t);
+  if(closed)scheduleRecalc(sym,250);
 }
 function applyTick(px){
   if(!candles.length||!isFinite(px))return;
   const b=candles[candles.length-1];
   const now=Math.floor(Date.now()/1000),step=STEP[interval],bt=Math.floor(now/step)*step;
-  if(bt>b.t){applyBar({t:bt,o:px,h:px,l:px,c:px,v:0},false);return}
+  if(bt>b.t){applyBar(symbol,{t:bt,o:px,h:px,l:px,c:px,v:0},false);return}
   b.c=px;if(px>b.h)b.h=px;if(px<b.l)b.l=px;
   if(S.candle){S.candle.update(b);}
   paintQuote(px,null);
-  onLivePrice(px,now);
+  onLivePrice(symbol,px,now);
 }
 
 /* ---------- chart ---------- */
@@ -1428,10 +1502,14 @@ function drawForecast(){
   }
   S.fcm.setData(mid);S.fcu.setData(up);S.fcd.setData(dn);
 }
-function allTrades(){
-  const hist=(analysis&&analysis.ok?analysis.bot.trades:[]).map(t=>Object.assign({},t,{live:false}));
+function allTrades(sym){
   const live=(liveBot?liveBot.trades:[]).map(t=>Object.assign({},t,{live:true}));
-  return hist.concat(live);
+  const hist=[];
+  const src=sym||symbol;
+  if(market[src]&&market[src].analysis&&market[src].analysis.ok){
+    market[src].analysis.bot.trades.forEach(t=>hist.push(Object.assign({},t,{live:false,symbol:src})));
+  }
+  return hist.concat(live).filter(t=>!t.symbol||t.symbol===src);
 }
 function drawTradeMarks(){
   if(!S.candle)return;
@@ -1439,7 +1517,7 @@ function drawTradeMarks(){
   priceLines=[];
   if(!overlays.tr){S.candle.setMarkers([]);return}
   const ms=[];
-  const tr=allTrades().slice(-70);
+  const tr=allTrades(symbol).slice(-70);
   for(const t of tr){
     const long=t.side>0;
     ms.push({time:t.t0,position:long?"belowBar":"aboveBar",color:long?"#20c997":"#ff5c70",
@@ -1447,7 +1525,7 @@ function drawTradeMarks(){
     ms.push({time:t.t1,position:long?"aboveBar":"belowBar",color:t.pnl>=0?"#20c997":"#ff5c70",
       shape:long?"arrowDown":"arrowUp",text:(long?"SELL ":"BUY ")+fmtPx(t.exit)+" "+(t.pnl>=0?"+":"")+t.pnl.toFixed(2)+"$"});
   }
-  const p=liveBot&&liveBot.pos?liveBot.pos:null;
+  const p=liveBot?ENG.getPos(liveBot,symbol):null;
   if(p){
     ms.push({time:p.t0,position:p.side>0?"belowBar":"aboveBar",color:"#5da9ff",
       shape:p.side>0?"arrowUp":"arrowDown",text:"OPEN "+(p.side>0?"LONG ":"SHORT ")+fmtPx(p.entry)});
@@ -1456,26 +1534,38 @@ function drawTradeMarks(){
   }
   const clean=ms.filter(m=>isFinite(m.time)).sort((a,b)=>a.time-b.time);
   S.candle.setMarkers(clean);
-  const n=allTrades().length;
+  const n=allTrades(symbol).length;
   $("jumpBtn").textContent=n?"Go to last trade ("+n+")":"Go to last trade";
 }
 
 /* ---------- bot persistence + live loop ---------- */
-function botKey(){return LS("bot."+symbol+"."+interval)}
-/* v3: starting equity moved from $1,000 to $1,000,000. Older saves are discarded on load
-   so a refresh after this change (or Reset) always boots a fresh $1M account. */
-const BOT_STORE_V=3;
+function botKey(){return LS("book."+interval)}
+function bookPrices(){
+  const o={};
+  BOOK.forEach(s=>{
+    const m=market[s];
+    if(m&&m.candles&&m.candles.length)o[s]=m.candles[m.candles.length-1].c;
+    else if(tickers[s])o[s]=tickers[s].px;
+  });
+  return o;
+}
+/* v4: one shared $1M book across BTC/ETH/SOL instead of a per-pair account. */
+const BOT_STORE_V=4;
 function loadLiveBot(){
   let b=null;
   try{
     const raw=localStorage.getItem(botKey());
     if(raw){
       const j=JSON.parse(raw);
-      if(j&&j.v===BOT_STORE_V&&j.bot&&j.bot.start===ENG.START)b=j.bot;
+      if(j&&j.v===BOT_STORE_V&&j.bot&&j.bot.start===ENG.START&&j.bot.positions)b=j.bot;
     }
   }catch(e){}
-  if(!b){b=ENG.newBot();b.paused=false}
+  if(!b){b=ENG.newBook();b.paused=false}
   if(!b.learn)b.learn=ENG.newLearn();
+  if(!b.learns)b.learns={};
+  if(!b.positions)b.positions={};
+  if(!b.lastTs)b.lastTs={};
+  if(!b.lastPxs)b.lastPxs={};
   if(!b.pending)b.pending=[];
   if(!b.curve)b.curve=[];
   liveBot=b;
@@ -1484,7 +1574,7 @@ function saveLiveBot(){
   if(!liveBot)return;
   try{
     const slim=Object.assign({},liveBot,{
-      trades:liveBot.trades.slice(-300),curve:liveBot.curve.slice(-600),pending:[]
+      trades:liveBot.trades.slice(-400),curve:liveBot.curve.slice(-800),pending:[]
     });
     localStorage.setItem(botKey(),JSON.stringify({v:BOT_STORE_V,bot:slim}));
   }catch(e){}
@@ -1523,40 +1613,70 @@ function diffLearn(merged,boot){
   for(const k in merged.exits)out.exits[k]=merged.exits[k]-(boot.exits[k]||0);
   return out;
 }
-/* feed newly closed bars into the live paper account */
-function runLiveBot(){
-  if(!analysis||!analysis.ok||!liveBot)return;
-  const rec=analysis.main.rec,I=analysis.I,H=analysis.H;
-  const closedN=lastOpen?candles.length-1:candles.length;
-  const boot=analysis.bot.learn;
-  liveBot.learn=mergeLearn(boot,liveBot.learn);
-  const start=liveBot.lastT==null?closedN-1:ENG.WARM;
+/* feed newly closed bars into the live paper account for one coin */
+function runLiveBot(sym){
+  const mk=market[sym];
+  if(!mk||!mk.analysis||!mk.analysis.ok||!liveBot)return;
+  const A=mk.analysis,rec=A.main.rec,I=A.I,H=A.H,cs=mk.candles;
+  const closedN=mk.lastOpen?cs.length-1:cs.length;
+  const lastSeen=liveBot.lastTs&&liveBot.lastTs[sym];
+  const start=lastSeen==null?Math.max(ENG.WARM,closedN-1):ENG.WARM;
+  const prices=bookPrices();
   for(let i=Math.max(start,ENG.WARM);i<closedN;i++){
-    const b=candles[i];
-    if(liveBot.lastT!=null&&b.t<=liveBot.lastT)continue;
+    const b=cs[i];
+    if(lastSeen!=null&&b.t<=lastSeen)continue;
     if(!rec[i])continue;
-    ENG.botStep(liveBot,{i:i,cs:candles,I:I,cp:rec[i].p,H:H,intraday:interval!=="1d",
-      paused:!!liveBot.paused,edgeOk:!!rec[i].edgeOk&&analysis.live.edgeOk,
-      zs:analysis.main.zs,thr:rec[i].thr});
-    /* realized-P&L feedback also nudges the live model weights */
+    ENG.botStep(liveBot,{i:i,cs:cs,I:I,cp:rec[i].p,H:H,intraday:interval!=="1d",
+      paused:!!liveBot.paused,edgeOk:true,freeTrade:true,
+      zs:A.main.zs,thr:rec[i].thr,sym:sym,prices:prices});
     if(liveBot.pending.length){
-      for(const s of liveBot.pending)analysis.state.model.fit(s.z,s.y,s.w);
+      for(const s of liveBot.pending)A.state.model.fit(s.z,s.y,s.w);
       liveBot.pending.length=0;
     }
   }
-  liveBot.learn=diffLearn(liveBot.learn,boot);
   saveLiveBot();
 }
-function onLivePrice(px,t){
+/* replay BTC/ETH/SOL history in time order so the book arrives already trading all three */
+function bootstrapBook(){
+  if(!liveBot||liveBot.paused)return;
+  if(liveBot.trades.length||(liveBot.lastTs&&BOOK.some(s=>liveBot.lastTs[s]!=null)))return;
+  if(BOOK.some(s=>!market[s]||!market[s].analysis||!market[s].analysis.ok))return;
+  const ev=[];
+  BOOK.forEach(s=>{
+    const mk=market[s],cs=mk.candles,rec=mk.analysis.main.rec;
+    const closedN=mk.lastOpen?cs.length-1:cs.length;
+    for(let i=ENG.WARM;i<closedN;i++)if(rec[i])ev.push({t:cs[i].t,s:s,i:i});
+  });
+  ev.sort((a,b)=>a.t-b.t||BOOK.indexOf(a.s)-BOOK.indexOf(b.s));
+  const prices={};
+  for(const e of ev){
+    const mk=market[e.s],A=mk.analysis,b=mk.candles[e.i];
+    prices[e.s]=b.c;
+    ENG.botStep(liveBot,{i:e.i,cs:mk.candles,I:A.I,cp:A.main.rec[e.i].p,H:A.H,
+      intraday:interval!=="1d",paused:false,edgeOk:true,freeTrade:true,
+      zs:A.main.zs,thr:A.main.rec[e.i].thr,sym:e.s,prices:prices});
+    if(liveBot.pending.length){
+      for(const s of liveBot.pending)A.state.model.fit(s.z,s.y,s.w);
+      liveBot.pending.length=0;
+    }
+  }
+  saveLiveBot();
+  lastBotRender=0;
+  renderBot();
+  if(symbol)drawTradeMarks();
+}
+function onLivePrice(sym,px,t){
   if(!liveBot)return;
-  if(!liveBot.paused&&liveBot.pos&&analysis&&analysis.ok){
-    /* closeTrade books the result into liveBot.learn, which holds this account's own deltas */
-    if(ENG.tickCheck(liveBot,px,t||Math.floor(Date.now()/1000),analysis.H)){
-      saveLiveBot();drawTradeMarks();
+  const mk=market[sym];
+  if(!liveBot.paused&&ENG.getPos(liveBot,sym)&&mk&&mk.analysis&&mk.analysis.ok){
+    if(ENG.tickCheck(liveBot,px,t||Math.floor(Date.now()/1000),mk.analysis.H,sym)){
+      saveLiveBot();
+      if(sym===symbol)drawTradeMarks();
     }
   }
   renderBot();
-  if(!provTimer)provTimer=setTimeout(()=>{provTimer=null;renderProvisional()},1500);
+  renderWatchlist();
+  if(sym===symbol&&!provTimer)provTimer=setTimeout(()=>{provTimer=null;renderProvisional()},1500);
 }
 function renderProvisional(){
   if(!analysis||!analysis.ok||!candles.length)return;
@@ -1580,7 +1700,10 @@ function renderWatchlist(){
   PAIRS.forEach(p=>{
     const el=$("wp-"+p[0]),t=tickers[p[0]];
     if(!el)return;
-    el.innerHTML=t?fmtPx(t.px)+"<small class='"+pn(t.chg)+"'>"+fmtPct(t.chg)+"</small>":"—";
+    const pos=liveBot?ENG.getPos(liveBot,p[0]):null;
+    const tag=pos?'<small class="'+(pos.side>0?"green":"red")+'">'+(pos.side>0?"LONG":"SHORT")+" "+fmtUsd(pos.entry*pos.qty)+"</small>":
+      (t?"<small class='"+pn(t.chg)+"'>"+fmtPct(t.chg)+"</small>":"");
+    el.innerHTML=(t?fmtPx(t.px):"—")+tag;
   });
   box.querySelectorAll(".watch").forEach(b=>b.classList.toggle("active",b.dataset.symbol===symbol));
 }
@@ -1624,7 +1747,7 @@ function renderHero(){
   $("volreg").textContent=vr==null?"—":(vr<.33?"low":vr<.67?"normal":"high")+" ("+(vr*100).toFixed(0)+"%)";
   $("dataNote").innerHTML="Source: <b>"+(dataSource==="binance"?(apiHost||"").replace("https://",""):"Coinbase Exchange")+
     "</b> · "+candles.length+" candles of "+interval+" history · live stream "+$("liveText").textContent+
-    ".<br>No API key, no backend: every request is a public CORS endpoint called straight from your browser. Bot state is saved in this browser's localStorage.";
+    ".<br>The Auto Trader is one $1,000,000 book watching BTC, ETH and SOL. Switching the chart does not pause the other two. No API key, no backend. Bot state is saved in this browser's localStorage.";
 }
 function row(k,v,cls){return'<div class="row"><span>'+k+'</span><b class="'+(cls||"")+'">'+v+'</b></div>'}
 function renderForecast(){
@@ -1654,10 +1777,12 @@ function renderPlan(){
     row("expected value",pl.ev.toFixed(3)+"R",pl.ev>0?"green":"red")+
     row("conviction",(L.conv*100).toFixed(2)+"pp vs "+(L.convThr*100).toFixed(2)+"pp needed",L.conv>=L.convThr?"green":"")+
     row("target vs costs",L.targetPct.toFixed(2)+"% vs "+L.costNeed.toFixed(2)+"% needed",L.costOk?"green":"red")+
-    row("bot would enter",
-      !L.edgeOk?"no — no measurable edge":(!L.costOk?"no — costs too high":(analysis.bot.halted?"no — halted on own P&L":(L.conv>=L.convThr?"yes":"no — below cutoff"))),
+    row("this chart's model",
+      !L.edgeOk?"stand down on this pair":(!L.costOk?"no — costs too high":(L.conv>=L.convThr?"signal":"below cutoff")),
       L.wouldTrade&&L.edgeOk?"green":"yellow")+
-    row("size if taken",pl.sizePct.toFixed(1)+"% of equity");
+    row("live book", "trades BTC, ETH and SOL on its own — can enter all three");
+    row("size if taken",pl.sizePct.toFixed(1)+"% of free cash")+
+    row("free cash now",liveBot?fmtUsd(ENG.freeCash(liveBot)):"—");
 }
 function renderSkill(){
   if(!analysis||!analysis.ok){$("skillRows").innerHTML=row("status","warming up");return}
@@ -1734,11 +1859,12 @@ function sparkline(id,series,colors){
 }
 function blotter(id,trades,limit){
   const t=trades.slice(-limit).reverse();
-  let h="<thead><tr><th>closed</th><th>side</th><th>entry</th><th>exit</th><th>size</th><th>fee</th><th>P&amp;L</th><th>%</th><th>R</th><th>why in</th><th>why out</th><th>equity</th></tr></thead><tbody>";
-  if(!t.length)h+="<tr><td colspan='12' class='muted'>no trades yet</td></tr>";
+  let h="<thead><tr><th>closed</th><th>pair</th><th>side</th><th>entry</th><th>exit</th><th>size</th><th>fee</th><th>P&amp;L</th><th>%</th><th>R</th><th>why in</th><th>why out</th><th>equity</th></tr></thead><tbody>";
+  if(!t.length)h+="<tr><td colspan='13' class='muted'>no trades yet</td></tr>";
   t.forEach(x=>{
+    const pair=(x.symbol||symbol).replace("USDT","");
     h+="<tr><td>"+new Date(x.t1*1000).toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})+
-      "</td><td class='"+(x.side>0?"green":"red")+"'>"+(x.side>0?"LONG":"SHORT")+"</td><td>"+fmtPx(x.entry)+"</td><td>"+fmtPx(x.exit)+
+      "</td><td>"+pair+"</td><td class='"+(x.side>0?"green":"red")+"'>"+(x.side>0?"LONG":"SHORT")+"</td><td>"+fmtPx(x.entry)+"</td><td>"+fmtPx(x.exit)+
       "</td><td>"+fmtUsd(x.notional)+"</td><td>"+fmtUsd(x.fees)+"</td><td class='"+pn(x.pnl)+"'>"+(x.pnl>=0?"+":"")+x.pnl.toFixed(2)+
       "</td><td class='"+pn(x.pnl)+"'>"+fmtPct(x.pct)+"</td><td>"+x.R.toFixed(2)+"</td><td>"+(x.reasonIn||"")+"</td><td>"+x.reasonOut+
       "</td><td>"+fmtUsd(x.equity)+"</td></tr>";
@@ -1748,17 +1874,19 @@ function blotter(id,trades,limit){
 function renderBot(){
   if(!liveBot)return;
   const st=ENG.botStats(liveBot);
-  const px=candles.length?candles[candles.length-1].c:null;
-  const un=px!=null?ENG.unreal(liveBot,px):0;
+  const prices=bookPrices();
+  const un=ENG.markToMarket(liveBot,prices);
   const eq=liveBot.equity+un;
   $("botEquity").textContent=fmtUsd(eq);
   $("botEquity").className=eq>=ENG.START?"green":"red";
   $("botReturn").textContent=fmtPct((eq/ENG.START-1)*100);
   $("botReturn").className=eq>=ENG.START?"green":"red";
-  const p=liveBot.pos;
-  $("botPos").innerHTML=p?"<span class='"+(p.side>0?"green":"red")+"'>"+(p.side>0?"LONG":"SHORT")+"</span> "+fmtUsd(p.entry*p.qty):"flat";
-  $("botUnreal").textContent=p?fmtUsd(un):"—";
-  $("botUnreal").className=p?pn(un):"";
+  const open=BOOK.map(s=>{const p=ENG.getPos(liveBot,s);return p?{s:s,p:p}:null}).filter(Boolean);
+  $("botPos").innerHTML=open.length
+    ?open.map(x=>"<span class='"+(x.p.side>0?"green":"red")+"'>"+x.s.replace("USDT","")+" "+(x.p.side>0?"L":"S")+"</span> "+fmtUsd(x.p.entry*x.p.qty)).join(" · ")
+    :"flat";
+  $("botUnreal").textContent=open.length?fmtUsd(un):"—";
+  $("botUnreal").className=open.length?pn(un):"";
   $("botTrades").textContent=st.n;
   $("botWin").textContent=st.win==null?"—":st.win.toFixed(1)+"%";
   $("botPF").textContent=st.pf==null?"—":(isFinite(st.pf)?st.pf.toFixed(2):"∞");
@@ -1766,53 +1894,75 @@ function renderBot(){
   $("botSharpe").textContent=st.sharpe==null?"—":st.sharpe.toFixed(2);
   $("botHold").textContent=st.avgBars==null?"—":fmtDur(st.avgBars*STEP[interval]);
   $("botFees").textContent=fmtUsd(st.fees);
+  const btc=market.BTCUSDT&&market.BTCUSDT.candles;
   let bh=null;
-  if(liveBot.firstPx&&px)bh=(px/liveBot.firstPx-1)*100;
+  if(liveBot.firstPx&&btc&&btc.length)bh=(btc[btc.length-1].c/liveBot.firstPx-1)*100;
   $("botBH").textContent=bh==null?"—":fmtPct(bh);
   $("botBH").className=bh==null?"":pn(bh);
+  const warmed=BOOK.filter(s=>market[s]&&market[s].analysis&&market[s].analysis.ok).length;
   const mode=liveBot.paused?"paused"
-    :(analysis&&analysis.ok&&!analysis.live.edgeOk?"stood down · no edge"
-    :(liveBot.halted?"halted · own P&L negative"
-    :(analysis&&analysis.ok&&!analysis.live.costOk?"stood down · costs > edge"
-    :(liveBot.probation?"probation · positive setups only":"armed"))));
-  const armed=mode==="armed";
+    :(warmed<1?"warming up"
+    :(open.length?"in market · "+open.length+"/3":"armed · BTC ETH SOL"));
+  const armed=!liveBot.paused&&warmed>0;
   $("botMode").textContent=mode;
   $("botMode").className="pill "+(armed?"g":"y");
   $("sideBotMode").textContent=mode;
   $("sideBotMode").className="pill "+(armed?"g":"y");
   $("botToggle").textContent=liveBot.paused?"Resume":"Pause";
+  const free=ENG.freeCash(liveBot);
   $("sideBotRows").innerHTML=
     row("equity",fmtUsd(eq),eq>=ENG.START?"green":"red")+
+    row("free cash",fmtUsd(free))+
     row("return",fmtPct((eq/ENG.START-1)*100),eq>=ENG.START?"green":"red")+
-    row("position",p?(p.side>0?"LONG":"SHORT"):"flat",p?(p.side>0?"green":"red"):"")+
-    row("unrealized",p?fmtUsd(un):"—",p?pn(un):"")+
+    row("open",open.length?open.map(x=>x.s.replace("USDT","")+" "+(x.p.side>0?"L":"S")).join(" · "):"flat")+
+    row("unrealized",open.length?fmtUsd(un):"—",open.length?pn(un):"")+
     row("closed trades",st.n)+
     row("win rate",st.win==null?"—":st.win.toFixed(1)+"%");
-  /* the heavy tables only matter while the tab is open; ticks arrive several times a second */
+  const books=$("botBooks");
+  if(books){
+    books.className="bookgrid";
+    books.innerHTML=BOOK.map(s=>{
+      const p=ENG.getPos(liveBot,s);
+      const mk=market[s];
+      const px=prices[s];
+      const u=p&&px!=null?ENG.unreal(liveBot,px,s):0;
+      const ready=mk&&mk.analysis&&mk.analysis.ok;
+      const stt=!ready?"warming":(p?(p.side>0?"LONG":"SHORT"):"flat");
+      const cls=p?(p.side>0?"green":"red"):"muted";
+      return '<div class="bookcard"><div class="nm">'+s.replace("USDT","/USDT")+'</div>'+
+        '<div class="st"><span class="'+cls+'">'+stt+'</span>'+(p?" · "+fmtUsd(p.entry*p.qty):"")+"</div>"+
+        '<div class="meta">'+(p?"entry "+fmtPx(p.entry)+" · uP&L "+fmtUsd(u):"free to enter · "+fmtUsd(free))+
+        (ready?"":" · loading model")+"</div></div>";
+    }).join("");
+  }
   const now=Date.now();
   if($("botTab").style.display!=="none"&&now-lastBotRender>1500){
     lastBotRender=now;
     const cur=liveBot.curve.map(x=>x.e);
     sparkline("botCurve",cur.length>1?[cur]:[[ENG.START,eq]],["#5da9ff"]);
-    blotter("botBlotter",liveBot.trades,60);
+    blotter("botBlotter",liveBot.trades,80);
     renderLearn();
   }
 }
 function renderLearn(){
-  if(!analysis||!analysis.ok||!liveBot)return;
-  const learn=mergeLearn(analysis.bot.learn,liveBot.learn);
+  if(!liveBot)return;
+  const mk=market[symbol];
+  const boot=mk&&mk.analysis&&mk.analysis.ok?mk.analysis.bot.learn:ENG.newLearn();
+  const live=ENG.learnOf(liveBot,symbol);
+  const learn=mergeLearn(boot,live);
   const arm=ENG.pickArm(learn);
   const gR=learn.all.sumR/(learn.all.n+15);
-  const sizeMult=Math.max(.25,Math.min(1.5,1+1.8*gR));
-  const thr=analysis.live.thr||{80:.01,90:.02,95:.03};
-  let h='<div class="learnrow"><span class="k">entry cutoff (learned)</span><b>top '+(100-arm.q)+'% conviction ≈ p&ge;'+((.5+thr[arm.q])*100).toFixed(2)+'%</b></div>'+
+  const sizeMult=Math.max(.25,Math.min(2.5,1+1.8*gR));
+  const thr=(mk&&mk.analysis&&mk.analysis.live&&mk.analysis.live.thr)||{80:.01,90:.02,95:.03};
+  let h='<div class="note" style="margin:0 0 8px">Learning below is for <b>'+label(symbol)+'</b> on this interval. The same bot also has independent books for the other two coins.</div>'+
+    '<div class="learnrow"><span class="k">entry cutoff (learned)</span><b>top '+(100-arm.q)+'% conviction ≈ p&ge;'+((.5+thr[arm.q])*100).toFixed(2)+'%</b></div>'+
     '<div class="learnrow"><span class="k">stop / target (learned)</span><b>'+arm.stopMult+'× / '+arm.targetMult+'× ATR</b></div>'+
     '<div class="learnrow"><span class="k">size multiplier (from realized R)</span><b>'+sizeMult.toFixed(2)+'×</b></div>'+
     '<div class="learnrow"><span class="k">trades learned from</span><b>'+learn.all.n+' ('+(learn.all.n?(learn.all.wins/learn.all.n*100).toFixed(0):"0")+'% win)</b></div>'+
     '<div class="learnrow"><span class="k">avg R per trade (shrunk)</span><b class="'+(gR>0?"green":"red")+'">'+gR.toFixed(3)+'R</b></div>'+
     '<div class="learnrow"><span class="k">exits</span><b>'+Object.keys(learn.exits).map(k=>k+" "+learn.exits[k]).join(" · ")+'</b></div>'+
     '<div class="learnrow"><span class="k">state</span><b>'+$("botMode").textContent+'</b></div>'+
-    '<div class="learnrow"><span class="k">cost hurdle</span><b>target must exceed '+(analysis.live.costNeed||0).toFixed(2)+'% (round trip fees+slippage &times;3)</b></div>';
+    '<div class="learnrow"><span class="k">cost hurdle</span><b>target must cover round-trip fees+slippage ('+(analysis&&analysis.ok&&analysis.live?analysis.live.costNeed.toFixed(2):"0.10")+'%)</b></div>';
   h+='<div class="note" style="margin:12px 0 6px"><b>Parameter arms</b> — 18 rule variants run in shadow mode on the same signals; the bot trades whichever has the best shrunk R.</div>';
   h+='<table class="table"><thead><tr><th>arm</th><th>selectivity</th><th>stop</th><th>target</th><th>trades</th><th>win</th><th>shrunk R</th><th>shadow equity</th></tr></thead><tbody>';
   learn.arms.map((a,i)=>({a:a,i:i,s:a.sumR/(a.n+8)})).sort((x,y)=>y.s-x.s).forEach(o=>{
@@ -1862,68 +2012,102 @@ function renderBacktest(){
 }
 
 /* ---------- orchestration ---------- */
-function scheduleRecalc(ms){
-  if(recalcTimer)clearTimeout(recalcTimer);
-  recalcTimer=setTimeout(recalc,ms||50);
+function scheduleRecalc(sym,ms){
+  if(!scheduleRecalc._t)scheduleRecalc._t={};
+  if(scheduleRecalc._t[sym])clearTimeout(scheduleRecalc._t[sym]);
+  scheduleRecalc._t[sym]=setTimeout(()=>recalc(sym),ms||50);
 }
-function recalc(){
-  if(busy||!candles.length)return;
-  busy=true;
-  const closed=lastOpen?candles.slice(0,-1):candles.slice();
+function recalc(sym){
+  sym=sym||symbol;
+  if(busySym[sym])return;
+  const mk=market[sym];
+  if(!mk||!mk.candles||!mk.candles.length)return;
+  busySym[sym]=true;
+  const closed=mk.lastOpen?mk.candles.slice(0,-1):mk.candles.slice();
   try{
-    analysis=ENG.analyze(closed,{intraday:interval!=="1d"});
-    if(!analysis.ok){showErr(analysis.reason)}else showErr(null);
-    if(analysis.ok){runLiveBot()}
+    mk.analysis=ENG.analyze(closed,{intraday:interval!=="1d"});
+    if(sym===symbol){
+      analysis=mk.analysis;
+      if(!analysis.ok)showErr(analysis.reason);else showErr(null);
+    }
+    if(mk.analysis.ok)runLiveBot(sym);
   }catch(e){
     console.error(e);
-    showErr("Engine error: "+e.message);
-    analysis=null;
+    if(sym===symbol){showErr("Engine error: "+e.message);analysis=null}
   }
-  busy=false;
-  renderAll();
-  drawChart();
-  if(analysis&&analysis.ok)checkAlert();
-  $("status").textContent=analysis&&analysis.ok
-    ?"model: "+analysis.H+"-bar horizon · "+analysis.metrics.ev.n+" OOS samples · "+analysis.ms+"ms"
-    :"warming up";
+  busySym[sym]=false;
+  if(sym===symbol){
+    candles=mk.candles;lastOpen=mk.lastOpen;analysis=mk.analysis;
+    renderAll();drawChart();
+    if(analysis&&analysis.ok)checkAlert();
+    $("status").textContent=analysis&&analysis.ok
+      ?"model: "+analysis.H+"-bar horizon · "+analysis.metrics.ev.n+" OOS samples · "+analysis.ms+"ms · book BTC/ETH/SOL"
+      :"warming up";
+  }else renderBot();
+}
+async function loadPair(sym,token){
+  $("status").textContent="loading "+label(sym)+" "+interval+"…";
+  let cs=[];
+  try{
+    cs=await loadBinance(sym,interval,WANT);
+    dataSource="binance";
+  }catch(e1){
+    if(sym!==symbol)throw e1;
+    try{
+      cs=await loadCoinbase(sym,interval,WANT);
+      dataSource="coinbase";
+      showErr("Binance endpoints unreachable ("+e1.message+") — fell back to Coinbase Exchange data.");
+    }catch(e2){
+      throw {binance:e1,coinbase:e2};
+    }
+  }
+  if(token!==loadToken)return;
+  if(cs.length<400&&sym===symbol){
+    showErr("Only "+cs.length+" candles available for "+label(sym)+" "+interval+"; the model needs ~400+. Try a faster interval.");
+  }
+  market[sym]={candles:cs,lastOpen:cs.length?(cs[cs.length-1].t+STEP[interval]>Date.now()/1000):false,analysis:null};
+}
+function warmOthers(token){
+  const rest=BOOK.filter(s=>s!==symbol);
+  let i=0;
+  (function next(){
+    if(token!==loadToken||i>=rest.length)return;
+    const s=rest[i++];
+    if(market[s]&&market[s].candles)recalc(s);
+    if(i<rest.length)setTimeout(next,40);
+    else bootstrapBook();
+  })();
 }
 async function load(){
   const token=++loadToken;
   closeStream();stopPoll();
-  candles=[];analysis=null;fitted=false;lastTick=null;
+  if(warmTimer){clearTimeout(warmTimer);warmTimer=null}
+  candles=[];analysis=null;fitted=false;lastTick=null;market={};
   showErr(null);
-  $("status").textContent="loading "+label(symbol)+" "+interval+"…";
+  $("status").textContent="loading BTC ETH SOL "+interval+"…";
   setLive("warn","connecting");
   loadLiveBot();
-  let cs=[];
   try{
-    cs=await loadBinance(symbol,interval,WANT);
-    dataSource="binance";
-  }catch(e1){
-    try{
-      cs=await loadCoinbase(symbol,interval,WANT);
-      dataSource="coinbase";
-      showErr("Binance endpoints unreachable ("+e1.message+") — fell back to Coinbase Exchange data.");
-    }catch(e2){
-      setLive("off","offline");
-      $("status").textContent="data error";
-      showErr("<b>Could not load market data.</b><br>Binance: "+e1.message+"<br>Coinbase: "+e2.message+
-        "<br>These are public CORS endpoints; a network block, VPN or ad-blocker is the usual cause. The page will keep working once one of them is reachable — press Reload.");
-      return;
-    }
+    await loadPair(symbol,token);
+  }catch(err){
+    setLive("off","offline");
+    $("status").textContent="data error";
+    const e1=err&&err.binance?err.binance:err,e2=err&&err.coinbase?err.coinbase:err;
+    showErr("<b>Could not load market data.</b><br>Binance: "+(e1&&e1.message||e1)+"<br>Coinbase: "+(e2&&e2.message||e2)+
+      "<br>These are public CORS endpoints; a network block, VPN or ad-blocker is the usual cause. The page will keep working once one of them is reachable — press Reload.");
+    return;
   }
   if(token!==loadToken)return;
-  if(cs.length<400){
-    showErr("Only "+cs.length+" candles available for "+label(symbol)+" "+interval+"; the model needs ~400+. Try a faster interval.");
-  }
-  candles=cs;
-  lastOpen=candles.length?(candles[candles.length-1].t+STEP[interval]>Date.now()/1000):false;
+  const mk=market[symbol];
+  candles=mk.candles;lastOpen=mk.lastOpen;
   buildChart();
   drawChart();
   paintQuote(candles[candles.length-1].c,null);
-  recalc();
+  recalc(symbol);
   openStream();
   loadWatchlist();
+  Promise.all(BOOK.filter(s=>s!==symbol).map(s=>loadPair(s,token).catch(e=>{console.warn("book load failed",s,e)})))
+    .then(()=>{if(token===loadToken)warmOthers(token)});
 }
 function selectSymbol(s){
   if(s===symbol)return;
@@ -1931,7 +2115,15 @@ function selectSymbol(s){
   symbol=s;
   try{localStorage.setItem(LS("symbol"),s)}catch(e){}
   renderWatchlist();
-  load();
+  if(market[s]&&market[s].candles&&market[s].candles.length){
+    candles=market[s].candles;lastOpen=market[s].lastOpen;analysis=market[s].analysis;
+    fitted=false;lastTick=null;
+    buildChart();drawChart();
+    if(candles.length)paintQuote(candles[candles.length-1].c,null);
+    if(analysis){renderAll();drawChart();$("status").textContent=analysis.ok?"model: "+analysis.H+"-bar horizon · book BTC/ETH/SOL":"warming up"}
+    else recalc(s);
+    openStream();
+  }else load();
 }
 function checkAlert(){
   if(!alertCfg||!analysis||!analysis.ok)return;
@@ -1962,7 +2154,7 @@ $("interval").onchange=e=>{
 $("refresh").onclick=()=>load();
 $("fitBtn").onclick=()=>{if(chart)chart.timeScale().fitContent()};
 $("jumpBtn").onclick=()=>{
-  const tr=allTrades();
+  const tr=allTrades(symbol);
   if(!chart||!tr.length){$("jumpBtn").textContent="no trades yet";setTimeout(()=>$("jumpBtn").textContent="Go to last trade",1500);return}
   const last=tr[tr.length-1],pad=45*STEP[interval];
   try{chart.timeScale().setVisibleRange({from:last.t0-pad,to:last.t1+pad})}catch(e){}
@@ -1984,8 +2176,8 @@ $("botToggle").onclick=()=>{liveBot.paused=!liveBot.paused;saveLiveBot();renderB
 $("botReset").onclick=()=>{
   const paused=liveBot?liveBot.paused:false;
   try{localStorage.removeItem(botKey())}catch(e){}
-  liveBot=ENG.newBot();liveBot.paused=paused;
-  saveLiveBot();renderBot();drawTradeMarks();
+  liveBot=ENG.newBook();liveBot.paused=paused;
+  saveLiveBot();renderBot();renderWatchlist();drawTradeMarks();
 };
 $("armAlert").onclick=async()=>{
   if("Notification"in window&&Notification.permission==="default")await Notification.requestPermission();
@@ -1999,7 +2191,7 @@ window.addEventListener("beforeunload",saveLiveBot);
 /* ---------- boot ---------- */
 (function boot(){
   try{
-    const s=localStorage.getItem(LS("symbol"));if(s&&PAIRS.some(p=>p[0]===s))symbol=s;
+    const s=localStorage.getItem(LS("symbol"));if(s&&BOOK.indexOf(s)>=0)symbol=s;
     const iv=localStorage.getItem(LS("interval"));if(iv&&STEP[iv])interval=iv;
   }catch(e){}
   $("interval").value=interval;
